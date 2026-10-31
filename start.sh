@@ -10,14 +10,168 @@ fail() {
 }
 
 require_uint() {
-    local name="$1" value="$2" min="$3" max="$4"
+    local name="$1" value="$2" min="$3" max="$4" normalized LC_ALL=C
     [[ "$value" =~ ^[0-9]+$ ]] || fail "$name must be an integer."
-    (( value >= min && value <= max )) || fail "$name must be between $min and $max."
+    normalized="$value"
+    while [[ ${#normalized} -gt 1 && "$normalized" == 0* ]]; do
+        normalized="${normalized#0}"
+    done
+    if (( ${#normalized} < ${#min} )) || \
+        { (( ${#normalized} == ${#min} )) && [[ "$normalized" < "$min" ]]; }; then
+        fail "$name must be between $min and $max."
+    fi
+    if (( ${#normalized} > ${#max} )) || \
+        { (( ${#normalized} == ${#max} )) && [[ "$normalized" > "$max" ]]; }; then
+        fail "$name must be between $min and $max."
+    fi
+    printf -v "$name" '%s' "$normalized"
 }
 
 has_unsafe_text() {
-    local value="$1"
-    [[ "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" == *$'\t'* || "$value" == *'"'* || "$value" == *'\\'* ]]
+    local value="$1" LC_ALL=C
+    [[ "$value" =~ [[:cntrl:]] || "$value" == *'"'* || "$value" == *'\\'* ]]
+}
+
+validate_app_manifest() {
+    local path="$1"
+    local expected_appid="$2"
+    LC_ALL=C awk -v expected_appid="$expected_appid" '
+        function record_key(key, value, normalized) {
+            normalized = tolower(key)
+            if (normalized == "appid") {
+                appid_total++
+                if (depth == 1) {
+                    appid_top++
+                    appid_value = value
+                }
+            } else if (normalized == "stateflags") {
+                stateflags_total++
+                if (depth == 1) {
+                    stateflags_top++
+                    stateflags_value = value
+                }
+            }
+        }
+        function string_token(value, key) {
+            if (finished || invalid) {
+                invalid = 1
+                return
+            }
+            if (!pending) {
+                pending_key = value
+                pending = 1
+                return
+            }
+            key = pending_key
+            pending_key = ""
+            pending = 0
+            if (depth == 0) {
+                invalid = 1
+                return
+            }
+            record_key(key, value)
+        }
+        function open_object(key) {
+            if (finished || invalid || !pending) {
+                invalid = 1
+                return
+            }
+            key = pending_key
+            pending_key = ""
+            pending = 0
+            record_key(key, "")
+            if (depth == 0) {
+                if (root_seen || tolower(key) != "appstate") {
+                    invalid = 1
+                    return
+                }
+                root_seen = 1
+            }
+            depth++
+        }
+        function close_object() {
+            if (invalid || pending || depth <= 0) {
+                invalid = 1
+                return
+            }
+            depth--
+            if (depth == 0) finished = 1
+        }
+        BEGIN {
+            depth = 0
+            pending_key = ""
+            pending = 0
+            root_seen = 0
+            finished = 0
+            invalid = 0
+            appid_total = 0
+            appid_top = 0
+            appid_value = ""
+            stateflags_total = 0
+            stateflags_top = 0
+            stateflags_value = ""
+        }
+        {
+            line = $0
+            length_line = length(line)
+            index_line = 1
+            while (index_line <= length_line && !invalid) {
+                character = substr(line, index_line, 1)
+                next_character = substr(line, index_line + 1, 1)
+                if (character ~ /[[:space:]]/) {
+                    index_line++
+                } else if (character == "/" && next_character == "/") {
+                    break
+                } else if (character == "{") {
+                    open_object()
+                    index_line++
+                } else if (character == "}") {
+                    close_object()
+                    index_line++
+                } else if (character == "\"") {
+                    value = ""
+                    closed_quote = 0
+                    index_line++
+                    while (index_line <= length_line) {
+                        character = substr(line, index_line, 1)
+                        if (character == "\\") {
+                            index_line++
+                            if (index_line > length_line) {
+                                invalid = 1
+                                break
+                            }
+                            escaped = substr(line, index_line, 1)
+                            if (escaped == "\"" || escaped == "\\") {
+                                value = value escaped
+                            } else if (escaped == "n") {
+                                value = value "\n"
+                            } else if (escaped == "t") {
+                                value = value "\t"
+                            } else {
+                                invalid = 1
+                                break
+                            }
+                            index_line++
+                        } else if (character == "\"") {
+                            closed_quote = 1
+                            index_line++
+                            break
+                        } else {
+                            value = value character
+                            index_line++
+                        }
+                    }
+                    if (!closed_quote) invalid = 1
+                    if (!invalid) string_token(value)
+                } else {
+                    invalid = 1
+                }
+            }
+        }
+        END {
+            exit !(invalid == 0 && root_seen == 1 && finished == 1 && depth == 0 && pending == 0 && appid_total == 1 && appid_top == 1 && appid_value == expected_appid && stateflags_total == 1 && stateflags_top == 1 && stateflags_value == "4")
+        }
+    ' "$path"
 }
 
 SERVER_NAME="${SERVER_NAME-Natural Selection 2 Server}"
@@ -47,13 +201,16 @@ if [[ -n "$SERVER_PASSWORD" ]]; then
 fi
 
 if [[ -n "$MOD_IDS" ]]; then
-    [[ "$MOD_IDS" =~ ^[0-9A-Fa-f]+([[:space:]]+[0-9A-Fa-f]+)*$ ]] || fail "MOD_IDS must be space-separated hexadecimal Workshop IDs."
+    (( ${#MOD_IDS} <= 512 )) || fail "MOD_IDS is limited to 512 characters."
+    [[ "$MOD_IDS" =~ ^[0-9A-Fa-f]+([ ][0-9A-Fa-f]+)*$ ]] || fail "MOD_IDS must be space-separated hexadecimal Workshop IDs."
     read -r -a mod_tokens <<< "$MOD_IDS"
     MOD_IDS="${mod_tokens[*]}"
 fi
 
 [[ -x ./x64/server_linux ]] || fail "Missing executable: x64/server_linux. Reinstall the server."
 [[ -f ./steamcmd/linux64/steamclient.so ]] || fail "Missing steamclient.so. Reinstall the server."
+[[ -f ./steamapps/appmanifest_4940.acf ]] || fail "Missing steamapps/appmanifest_4940.acf. Reinstall the server."
+validate_app_manifest ./steamapps/appmanifest_4940.acf 4940 || fail "Steam manifest must identify app 4940 and mark it fully installed with StateFlags 4 exactly once at the AppState top level. Reinstall the server."
 
 mkdir -p .steam/sdk64 config/Workshop logs
 ln -sfn "$SERVER_ROOT/steamcmd/linux64/steamclient.so" .steam/sdk64/steamclient.so

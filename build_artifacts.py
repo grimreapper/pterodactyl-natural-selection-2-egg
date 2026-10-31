@@ -4,13 +4,58 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+
+
+def resolve_exported_at(path: Path) -> str:
+    source_date_epoch = os.environ.get("SOURCE_DATE_EPOCH")
+    if source_date_epoch is not None:
+        if not re.fullmatch(r"[0-9]+", source_date_epoch):
+            raise SystemExit("SOURCE_DATE_EPOCH must be a non-negative integer")
+        try:
+            moment = datetime.fromtimestamp(int(source_date_epoch), timezone.utc)
+        except (OSError, OverflowError, ValueError) as error:
+            raise SystemExit(f"SOURCE_DATE_EPOCH is out of range: {error}") from error
+        return moment.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+    if path.is_file():
+        try:
+            previous = json.loads(path.read_text()).get("exported_at")
+        except (json.JSONDecodeError, OSError):
+            previous = None
+        if isinstance(previous, str) and re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+            previous,
+        ):
+            try:
+                datetime.strptime(previous, "%Y-%m-%dT%H:%M:%SZ")
+            except ValueError:
+                pass
+            else:
+                return previous
+
+    return "1970-01-01T00:00:00Z"
+
+
+exported_at = resolve_exported_at(ROOT / "egg-natural-selection-2.json")
 START = (ROOT / "start.sh").read_text()
 if "NS2_START_SCRIPT" in START:
     raise SystemExit("start.sh contains reserved heredoc marker")
+
+
+def extract_shell_function(source: str, name: str) -> str:
+    marker = f"{name}() {{"
+    start = source.index(marker)
+    end = source.index("\n}\n", start) + 3
+    return source[start:end]
+
+
+MANIFEST_VALIDATOR = extract_shell_function(START, "validate_app_manifest")
 
 MAP_CYCLE = """{
   "time": 30,
@@ -38,22 +83,33 @@ MAP_CYCLE = """{
 }
 """
 
-INSTALL_PREFIX = r'''#!/usr/bin/env bash
+INSTALL_PREFIX = (
+    r'''#!/usr/bin/env bash
 set -Eeuo pipefail
 
-SERVER_DIR=/mnt/server
-STEAMCMD_URL=https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz
+SERVER_DIR="/mnt/server"
+STEAMCMD_URL=https://media.steampowered.com/client/steamcmd_linux.tar.gz
+STEAMCMD_SHA256=cebf0046bfd08cf45da6bc094ae47aa39ebf4155e5ede41373b579b8f1071e7c
+STEAMCMD_SIZE=2428561
+STEAMCMD_ARCHIVE=$(mktemp /tmp/steamcmd_linux.XXXXXX)
+trap 'rm -f "$STEAMCMD_ARCHIVE"' EXIT
 
 [[ "${SRCDS_APPID:-4940}" == "4940" ]] || { echo "Refusing unexpected app ID." >&2; exit 1; }
 mkdir -p "$SERVER_DIR/steamcmd" "$SERVER_DIR/steamapps" "$SERVER_DIR/config" "$SERVER_DIR/logs"
 
-curl --fail --location --silent --show-error --retry 4 --connect-timeout 20 \
+curl --fail --location --silent --show-error --retry 4 --retry-all-errors --retry-delay 2 --connect-timeout 20 \
+    --max-filesize "$STEAMCMD_SIZE" \
     --proto '=https' --tlsv1.2 \
-    --url "$STEAMCMD_URL" --output /tmp/steamcmd_linux.tar.gz
-tar -xzf /tmp/steamcmd_linux.tar.gz -C "$SERVER_DIR/steamcmd"
-rm -f /tmp/steamcmd_linux.tar.gz
+    --url "$STEAMCMD_URL" --output "$STEAMCMD_ARCHIVE"
+[[ "$(stat -c %s "$STEAMCMD_ARCHIVE")" == "$STEAMCMD_SIZE" ]] || { echo "SteamCMD archive size mismatch." >&2; exit 1; }
+printf '%s  %s\n' "$STEAMCMD_SHA256" "$STEAMCMD_ARCHIVE" | sha256sum --check --status || { echo "SteamCMD archive checksum mismatch." >&2; exit 1; }
+tar --no-same-owner -xzf "$STEAMCMD_ARCHIVE" -C "$SERVER_DIR/steamcmd"
+rm -f "$STEAMCMD_ARCHIVE"
+trap - EXIT
 
-chown -R root:root /mnt
+if (( EUID == 0 )); then
+    chown -R root:root "$SERVER_DIR"
+fi
 export HOME="$SERVER_DIR"
 cd "$SERVER_DIR/steamcmd"
 ./steamcmd.sh \
@@ -62,15 +118,21 @@ cd "$SERVER_DIR/steamcmd"
     +app_info_update 1 \
     +app_update 4940 validate \
     +quit
-
+'''
+    + "\n"
+    + MANIFEST_VALIDATOR
+    + r'''
 [[ -x "$SERVER_DIR/x64/server_linux" ]] || { echo "SteamCMD completed without x64/server_linux." >&2; exit 1; }
 [[ -f "$SERVER_DIR/steamcmd/linux64/steamclient.so" ]] || { echo "Missing 64-bit steamclient.so." >&2; exit 1; }
+[[ -f "$SERVER_DIR/steamapps/appmanifest_4940.acf" ]] || { echo "Missing appmanifest_4940.acf." >&2; exit 1; }
+validate_app_manifest "$SERVER_DIR/steamapps/appmanifest_4940.acf" 4940 || { echo "Steam manifest must identify app 4940 and mark it fully installed with StateFlags 4 exactly once at the AppState top level." >&2; exit 1; }
 mkdir -p "$SERVER_DIR/.steam/sdk64"
 cp -f "$SERVER_DIR/steamcmd/linux64/steamclient.so" "$SERVER_DIR/.steam/sdk64/steamclient.so"
 
 if [[ ! -f "$SERVER_DIR/config/MapCycle.json" ]]; then
     cat > "$SERVER_DIR/config/MapCycle.json" <<'NS2_MAP_CYCLE'
 '''
+)
 
 INSTALL_MIDDLE = r'''NS2_MAP_CYCLE
 fi
@@ -200,7 +262,7 @@ variables = [
         "default_value": "0",
         "user_viewable": False,
         "user_editable": False,
-        "rules": "required|boolean",
+        "rules": "required|string|in:0",
         "field_type": "text",
     },
 ]
@@ -208,7 +270,7 @@ variables = [
 egg = {
     "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
     "meta": {"version": "PTDL_v2", "update_url": None},
-    "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    "exported_at": exported_at,
     "name": "Natural Selection 2",
     "author": "community@example.invalid",
     "description": "Natural Selection 2 native Linux dedicated server (Steam app 4940). Anonymous SteamCMD install, automatic updates, and configurable vanilla maps/mods.",
@@ -239,6 +301,8 @@ checksum_files = [
     "install.sh",
     "start.sh",
     "README.md",
+    "LICENSE",
+    "build_artifacts.py",
     "tests/test_egg.py",
 ]
 lines = []
@@ -246,4 +310,22 @@ for name in checksum_files:
     data = (ROOT / name).read_bytes()
     lines.append(f"{hashlib.sha256(data).hexdigest()}  {name}")
 (ROOT / "SHA256SUMS").write_text("\n".join(lines) + "\n")
-print("generated egg-natural-selection-2.json, install.sh, and SHA256SUMS")
+
+archive_files = checksum_files + ["SHA256SUMS"]
+archive_path = ROOT / "natural-selection-2-pterodactyl-egg.zip"
+executable_files = {"install.sh", "start.sh", "build_artifacts.py"}
+with zipfile.ZipFile(
+    archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+) as archive:
+    for name in archive_files:
+        info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+        info.compress_type = zipfile.ZIP_DEFLATED
+        info.create_system = 3
+        mode = 0o755 if name in executable_files else 0o644
+        info.external_attr = (0o100000 | mode) << 16
+        archive.writestr(info, (ROOT / name).read_bytes(), compresslevel=9)
+
+print(
+    "generated egg-natural-selection-2.json, install.sh, SHA256SUMS, "
+    "and natural-selection-2-pterodactyl-egg.zip"
+)

@@ -7,6 +7,7 @@ Importable PTDL_v2 egg for the native Linux Natural Selection 2 dedicated server
 - Installs Steam app **4940** through anonymous SteamCMD.
 - Uses the supported native Linux `x64/server_linux` binary.
 - Uses `ghcr.io/ptero-eggs/steamcmd:debian` at runtime.
+- Uses `ghcr.io/ptero-eggs/installers:debian` for installation.
 - Updates automatically at container start by default.
 - Keeps configuration, logs, Workshop data, and generated JSON files inside the Pterodactyl volume.
 - Exposes vanilla map, player/spectator, password, and Workshop mod settings.
@@ -59,6 +60,8 @@ Modern UGC and per-map mods can instead be placed in `config/MapCycle.json`; dec
 ## Security notes
 
 - No Steam username or password is needed or exposed.
+- The installer downloads SteamCMD over HTTPS and verifies the reviewed archive's exact size and SHA-256 before extraction. A Valve archive rotation must be reviewed and updated in `build_artifacts.py`; checksum failures are intentionally fatal.
+- Installation and startup require `steamapps/appmanifest_4940.acf` to identify app `4940` with complete state flag `4`, in addition to requiring `x64/server_linux` and the 64-bit Steam client library.
 - The built-in NS2 web admin is intentionally disabled because it is plaintext HTTP and can execute console commands.
 - The built-in mod backup HTTP server is omitted from this portable egg. In a Docker/NAT deployment it needs one address for both binding and client advertisement; `0.0.0.0` fails and a container-private address is unusable by players. Steam Workshop remains the normal mod-delivery path.
 - The startup wrapper rejects unsafe control characters, quotes, backslashes, invalid maps, invalid ports, and invalid mod ID lists.
@@ -71,6 +74,9 @@ Run:
 python3 build_artifacts.py
 python3 -m unittest -v tests/test_egg.py
 sha256sum -c SHA256SUMS
+unzip -t natural-selection-2-pterodactyl-egg.zip
 ```
 
-The release validation also requires a real app-4940 install and bounded server smoke test: process survival, UDP game/query sockets, and an A2S_INFO response reporting app `4920`, the configured name/map, and player limit.
+`build_artifacts.py` regenerates the standalone installer, embedded egg installer, checksums, and release ZIP. Rebuilds preserve the checked-in egg's valid `exported_at` value so identical inputs remain byte-for-byte reproducible; packagers can set `SOURCE_DATE_EPOCH` for an explicit deterministic timestamp. The checksum manifest covers every payload file other than itself, and the tests require every archived file to equal the current worktree byte-for-byte.
+
+The release validation also requires a clean anonymous app-4940 install and bounded server smoke test with contiguous allocated UDP ports. Verify process survival, both game/query sockets, and an A2S_INFO response reporting game app `4920`, the configured name/map, and player limit. Then complete a remote join, password test, graceful `^C` stop, restart/persistence check, and one Workshop mod test. `Connected to Steam servers` alone is not proof that the server is externally queryable or joinable.

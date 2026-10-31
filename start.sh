@@ -11,11 +11,10 @@ fail() {
 
 require_uint() {
     local name="$1" value="$2" min="$3" max="$4" normalized LC_ALL=C
+    (( ${#value} <= 20 )) || fail "$name must be between $min and $max."
     [[ "$value" =~ ^[0-9]+$ ]] || fail "$name must be an integer."
-    normalized="$value"
-    while [[ ${#normalized} -gt 1 && "$normalized" == 0* ]]; do
-        normalized="${normalized#0}"
-    done
+    normalized="${value#"${value%%[!0]*}"}"
+    [[ -n "$normalized" ]] || normalized=0
     if (( ${#normalized} < ${#min} )) || \
         { (( ${#normalized} == ${#min} )) && [[ "$normalized" < "$min" ]]; }; then
         fail "$name must be between $min and $max."
@@ -29,7 +28,7 @@ require_uint() {
 
 has_unsafe_text() {
     local value="$1" LC_ALL=C
-    [[ "$value" =~ [[:cntrl:]] || "$value" == *'"'* || "$value" == *'\\'* ]]
+    [[ "$value" =~ [[:cntrl:]] || "$value" == *'"'* || "$value" == *'\'* ]]
 }
 
 validate_app_manifest() {

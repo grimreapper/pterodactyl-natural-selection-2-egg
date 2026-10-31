@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import pathlib
@@ -333,9 +334,14 @@ class EggTests(unittest.TestCase):
             self.assertEqual(generated["exported_at"], "1970-01-01T00:00:01Z")
 
     def test_checksum_manifest_covers_release_payload(self):
-        covered = {line.split("  ", 1)[1] for line in CHECKSUMS.read_text().splitlines()}
+        checksums = {
+            name: digest
+            for digest, name in (
+                line.split("  ", 1) for line in CHECKSUMS.read_text().splitlines()
+            )
+        }
         self.assertEqual(
-            covered,
+            set(checksums),
             {
                 "egg-natural-selection-2.json",
                 "install.sh",
@@ -346,6 +352,8 @@ class EggTests(unittest.TestCase):
                 "tests/test_egg.py",
             },
         )
+        for name, digest in checksums.items():
+            self.assertEqual(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), digest)
 
     def test_release_archive_matches_worktree_payload(self):
         expected = {
@@ -360,6 +368,9 @@ class EggTests(unittest.TestCase):
         }
         with zipfile.ZipFile(ARCHIVE) as archive:
             self.assertEqual(set(archive.namelist()), expected)
+            self.assertTrue(
+                all(info.compress_type == zipfile.ZIP_STORED for info in archive.infolist())
+            )
             for name in expected:
                 self.assertEqual(archive.read(name), (ROOT / name).read_bytes(), name)
 
@@ -433,6 +444,21 @@ class EggTests(unittest.TestCase):
                     run = subprocess.run([START], env=env, capture_output=True)
                     self.assertEqual(run.returncode == 0, accepted)
 
+    def test_startup_rejects_long_leading_zero_input_in_bounded_time(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = self._fake_root(td)
+            env = os.environ.copy()
+            env.update(
+                SERVER_ROOT=str(root),
+                SERVER_PORT="29915",
+                MAX_PLAYERS="0" * 30000 + "24",
+            )
+            run = subprocess.run(
+                [START], env=env, text=True, capture_output=True, timeout=2
+            )
+            self.assertNotEqual(run.returncode, 0)
+            self.assertIn("between", run.stderr)
+
     def test_invalid_map_fails_closed(self):
         with tempfile.TemporaryDirectory() as td:
             root = self._fake_root(td)
@@ -480,6 +506,22 @@ class EggTests(unittest.TestCase):
             run = subprocess.run([START], env=env, text=True, capture_output=True)
             self.assertNotEqual(run.returncode, 0)
             self.assertIn("control characters", run.stderr)
+
+    def test_text_inputs_reject_single_backslashes(self):
+        cases = (
+            ("SERVER_NAME", "Unsafe\\Name"),
+            ("SERVER_PASSWORD", "Unsafe\\Password"),
+        )
+        with tempfile.TemporaryDirectory() as td:
+            root = self._fake_root(td)
+            for name, value in cases:
+                with self.subTest(name=name):
+                    env = os.environ.copy()
+                    env.update(SERVER_ROOT=str(root), SERVER_PORT="29915")
+                    env[name] = value
+                    run = subprocess.run([START], env=env, text=True, capture_output=True)
+                    self.assertNotEqual(run.returncode, 0)
+                    self.assertIn("backslashes", run.stderr)
 
     def test_startup_rejects_missing_app_manifest(self):
         with tempfile.TemporaryDirectory() as td:

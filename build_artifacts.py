@@ -314,16 +314,14 @@ for name in checksum_files:
 archive_files = checksum_files + ["SHA256SUMS"]
 archive_path = ROOT / "natural-selection-2-pterodactyl-egg.zip"
 executable_files = {"install.sh", "start.sh", "build_artifacts.py"}
-with zipfile.ZipFile(
-    archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
-) as archive:
+with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
     for name in archive_files:
         info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
-        info.compress_type = zipfile.ZIP_DEFLATED
+        info.compress_type = zipfile.ZIP_STORED
         info.create_system = 3
         mode = 0o755 if name in executable_files else 0o644
         info.external_attr = (0o100000 | mode) << 16
-        archive.writestr(info, (ROOT / name).read_bytes(), compresslevel=9)
+        archive.writestr(info, (ROOT / name).read_bytes())
 
 print(
     "generated egg-natural-selection-2.json, install.sh, SHA256SUMS, "

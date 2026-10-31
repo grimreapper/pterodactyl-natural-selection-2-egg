@@ -36,6 +36,9 @@ cd "$SERVER_DIR/steamcmd"
 validate_app_manifest() {
     local path="$1"
     local expected_appid="$2"
+    local manifest_size
+    manifest_size=$(stat -c %s -- "$path") || return 1
+    (( manifest_size <= 65536 )) || return 1
     LC_ALL=C awk -v expected_appid="$expected_appid" '
         function record_key(key, value, normalized) {
             normalized = tolower(key)
@@ -175,11 +178,12 @@ validate_app_manifest() {
     ' "$path"
 }
 
-[[ -x "$SERVER_DIR/x64/server_linux" ]] || { echo "SteamCMD completed without x64/server_linux." >&2; exit 1; }
+[[ -f "$SERVER_DIR/x64/server_linux" && -x "$SERVER_DIR/x64/server_linux" ]] || { echo "SteamCMD completed without x64/server_linux." >&2; exit 1; }
 [[ -f "$SERVER_DIR/steamcmd/linux64/steamclient.so" ]] || { echo "Missing 64-bit steamclient.so." >&2; exit 1; }
 [[ -f "$SERVER_DIR/steamapps/appmanifest_4940.acf" ]] || { echo "Missing appmanifest_4940.acf." >&2; exit 1; }
 validate_app_manifest "$SERVER_DIR/steamapps/appmanifest_4940.acf" 4940 || { echo "Steam manifest must identify app 4940 and mark it fully installed with StateFlags 4 exactly once at the AppState top level." >&2; exit 1; }
 mkdir -p "$SERVER_DIR/.steam/sdk64"
+rm -f "$SERVER_DIR/.steam/sdk64/steamclient.so"
 cp -f "$SERVER_DIR/steamcmd/linux64/steamclient.so" "$SERVER_DIR/.steam/sdk64/steamclient.so"
 
 if [[ ! -f "$SERVER_DIR/config/MapCycle.json" ]]; then
@@ -248,6 +252,9 @@ has_unsafe_text() {
 validate_app_manifest() {
     local path="$1"
     local expected_appid="$2"
+    local manifest_size
+    manifest_size=$(stat -c %s -- "$path") || return 1
+    (( manifest_size <= 65536 )) || return 1
     LC_ALL=C awk -v expected_appid="$expected_appid" '
         function record_key(key, value, normalized) {
             normalized = tolower(key)
@@ -420,7 +427,7 @@ if [[ -n "$MOD_IDS" ]]; then
     MOD_IDS="${mod_tokens[*]}"
 fi
 
-[[ -x ./x64/server_linux ]] || fail "Missing executable: x64/server_linux. Reinstall the server."
+[[ -f ./x64/server_linux && -x ./x64/server_linux ]] || fail "Missing executable: x64/server_linux. Reinstall the server."
 [[ -f ./steamcmd/linux64/steamclient.so ]] || fail "Missing steamclient.so. Reinstall the server."
 [[ -f ./steamapps/appmanifest_4940.acf ]] || fail "Missing steamapps/appmanifest_4940.acf. Reinstall the server."
 validate_app_manifest ./steamapps/appmanifest_4940.acf 4940 || fail "Steam manifest must identify app 4940 and mark it fully installed with StateFlags 4 exactly once at the AppState top level. Reinstall the server."

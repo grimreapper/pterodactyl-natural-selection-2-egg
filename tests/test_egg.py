@@ -163,6 +163,14 @@ class EggTests(unittest.TestCase):
             installer_only,
         )
         self.assertNotIn("grep -E", installer_only)
+        self.assertIn(
+            '[[ -f "$SERVER_DIR/x64/server_linux" && -x "$SERVER_DIR/x64/server_linux" ]]',
+            installer_only,
+        )
+        self.assertLess(
+            installer_only.index('rm -f "$SERVER_DIR/.steam/sdk64/steamclient.so"'),
+            installer_only.index('cp -f "$SERVER_DIR/steamcmd/linux64/steamclient.so"'),
+        )
 
     def _run_manifest_validator(self, source_path, contents):
         with tempfile.TemporaryDirectory() as td:
@@ -262,6 +270,15 @@ class EggTests(unittest.TestCase):
                 with self.subTest(source=source_path.name, contents=contents):
                     run = self._run_manifest_validator(source_path, contents)
                     self.assertNotEqual(run.returncode, 0, contents)
+
+    def test_manifest_validators_reject_oversized_input(self):
+        oversized = '"AppState" { "appid" "4940" "StateFlags" "4" "Note" "' + (
+            "A" * 65537
+        ) + '" }\n'
+        for source_path in (INSTALL, START):
+            with self.subTest(source=source_path.name):
+                run = self._run_manifest_validator(source_path, oversized)
+                self.assertNotEqual(run.returncode, 0)
 
     def test_installer_limits_ownership_changes_to_server_directory(self):
         text = INSTALL.read_text()
@@ -532,6 +549,17 @@ class EggTests(unittest.TestCase):
             run = subprocess.run([START], env=env, text=True, capture_output=True)
             self.assertNotEqual(run.returncode, 0)
             self.assertIn("appmanifest_4940.acf", run.stderr)
+
+    def test_startup_rejects_directory_in_place_of_server_binary(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = self._fake_root(td)
+            (root / "x64/server_linux").unlink()
+            (root / "x64/server_linux").mkdir()
+            env = os.environ.copy()
+            env.update(SERVER_ROOT=str(root), SERVER_PORT="29915")
+            run = subprocess.run([START], env=env, text=True, capture_output=True)
+            self.assertNotEqual(run.returncode, 0)
+            self.assertIn("x64/server_linux", run.stderr)
 
     def test_startup_rejects_wrong_app_manifest(self):
         with tempfile.TemporaryDirectory() as td:

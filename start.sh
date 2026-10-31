@@ -34,6 +34,9 @@ has_unsafe_text() {
 validate_app_manifest() {
     local path="$1"
     local expected_appid="$2"
+    local manifest_size
+    manifest_size=$(stat -c %s -- "$path") || return 1
+    (( manifest_size <= 65536 )) || return 1
     LC_ALL=C awk -v expected_appid="$expected_appid" '
         function record_key(key, value, normalized) {
             normalized = tolower(key)
@@ -206,7 +209,7 @@ if [[ -n "$MOD_IDS" ]]; then
     MOD_IDS="${mod_tokens[*]}"
 fi
 
-[[ -x ./x64/server_linux ]] || fail "Missing executable: x64/server_linux. Reinstall the server."
+[[ -f ./x64/server_linux && -x ./x64/server_linux ]] || fail "Missing executable: x64/server_linux. Reinstall the server."
 [[ -f ./steamcmd/linux64/steamclient.so ]] || fail "Missing steamclient.so. Reinstall the server."
 [[ -f ./steamapps/appmanifest_4940.acf ]] || fail "Missing steamapps/appmanifest_4940.acf. Reinstall the server."
 validate_app_manifest ./steamapps/appmanifest_4940.acf 4940 || fail "Steam manifest must identify app 4940 and mark it fully installed with StateFlags 4 exactly once at the AppState top level. Reinstall the server."

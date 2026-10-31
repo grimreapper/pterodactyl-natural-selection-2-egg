@@ -122,11 +122,12 @@ cd "$SERVER_DIR/steamcmd"
     + "\n"
     + MANIFEST_VALIDATOR
     + r'''
-[[ -x "$SERVER_DIR/x64/server_linux" ]] || { echo "SteamCMD completed without x64/server_linux." >&2; exit 1; }
+[[ -f "$SERVER_DIR/x64/server_linux" && -x "$SERVER_DIR/x64/server_linux" ]] || { echo "SteamCMD completed without x64/server_linux." >&2; exit 1; }
 [[ -f "$SERVER_DIR/steamcmd/linux64/steamclient.so" ]] || { echo "Missing 64-bit steamclient.so." >&2; exit 1; }
 [[ -f "$SERVER_DIR/steamapps/appmanifest_4940.acf" ]] || { echo "Missing appmanifest_4940.acf." >&2; exit 1; }
 validate_app_manifest "$SERVER_DIR/steamapps/appmanifest_4940.acf" 4940 || { echo "Steam manifest must identify app 4940 and mark it fully installed with StateFlags 4 exactly once at the AppState top level." >&2; exit 1; }
 mkdir -p "$SERVER_DIR/.steam/sdk64"
+rm -f "$SERVER_DIR/.steam/sdk64/steamclient.so"
 cp -f "$SERVER_DIR/steamcmd/linux64/steamclient.so" "$SERVER_DIR/.steam/sdk64/steamclient.so"
 
 if [[ ! -f "$SERVER_DIR/config/MapCycle.json" ]]; then

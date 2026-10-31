@@ -1,0 +1,144 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-10-31T12:49:49Z",
+    "name": "Natural Selection 2",
+    "author": "community@example.invalid",
+    "description": "Natural Selection 2 native Linux dedicated server (Steam app 4940). Anonymous SteamCMD install, automatic updates, and configurable vanilla maps/mods.",
+    "features": [
+        "steam_disk_space"
+    ],
+    "docker_images": {
+        "SteamCMD (Debian)": "ghcr.io/ptero-eggs/steamcmd:debian"
+    },
+    "file_denylist": [],
+    "startup": "./start.sh",
+    "config": {
+        "files": "{}",
+        "startup": "{\n    \"done\": \"Connected to Steam servers\"\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/usr/bin/env bash\nset -Eeuo pipefail\n\nSERVER_DIR=/mnt/server\nSTEAMCMD_URL=https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\n\n[[ \"${SRCDS_APPID:-4940}\" == \"4940\" ]] || { echo \"Refusing unexpected app ID.\" >&2; exit 1; }\nmkdir -p \"$SERVER_DIR/steamcmd\" \"$SERVER_DIR/steamapps\" \"$SERVER_DIR/config\" \"$SERVER_DIR/logs\"\n\ncurl --fail --location --silent --show-error --retry 4 --connect-timeout 20 \\\n    --proto '=https' --tlsv1.2 \\\n    --url \"$STEAMCMD_URL\" --output /tmp/steamcmd_linux.tar.gz\ntar -xzf /tmp/steamcmd_linux.tar.gz -C \"$SERVER_DIR/steamcmd\"\nrm -f /tmp/steamcmd_linux.tar.gz\n\nchown -R root:root /mnt\nexport HOME=\"$SERVER_DIR\"\ncd \"$SERVER_DIR/steamcmd\"\n./steamcmd.sh \\\n    +force_install_dir \"$SERVER_DIR\" \\\n    +login anonymous \\\n    +app_info_update 1 \\\n    +app_update 4940 validate \\\n    +quit\n\n[[ -x \"$SERVER_DIR/x64/server_linux\" ]] || { echo \"SteamCMD completed without x64/server_linux.\" >&2; exit 1; }\n[[ -f \"$SERVER_DIR/steamcmd/linux64/steamclient.so\" ]] || { echo \"Missing 64-bit steamclient.so.\" >&2; exit 1; }\nmkdir -p \"$SERVER_DIR/.steam/sdk64\"\ncp -f \"$SERVER_DIR/steamcmd/linux64/steamclient.so\" \"$SERVER_DIR/.steam/sdk64/steamclient.so\"\n\nif [[ ! -f \"$SERVER_DIR/config/MapCycle.json\" ]]; then\n    cat > \"$SERVER_DIR/config/MapCycle.json\" <<'NS2_MAP_CYCLE'\n{\n  \"time\": 30,\n  \"mode\": \"order\",\n  \"maps\": [\n    \"ns2_summit\",\n    \"ns2_mineshaft\",\n    \"ns2_tram\",\n    \"ns2_veil\",\n    \"ns2_docking\",\n    \"ns2_descent\",\n    \"ns2_refinery\",\n    \"ns2_biodome\",\n    \"ns2_eclipse\",\n    \"ns2_caged\",\n    \"ns2_kodiak\",\n    \"ns2_derelict\",\n    \"ns2_unearthed\",\n    \"ns2_origin\",\n    \"ns2_tanith\",\n    \"ns2_ayumi\",\n    \"ns2_metro\"\n  ],\n  \"mods\": []\n}\nNS2_MAP_CYCLE\nfi\n\ncat > \"$SERVER_DIR/start.sh\" <<'NS2_START_SCRIPT'\n#!/usr/bin/env bash\nset -Eeuo pipefail\n\nSERVER_ROOT=\"${SERVER_ROOT:-/home/container}\"\ncd \"$SERVER_ROOT\"\n\nfail() {\n    printf 'ERROR: %s\\n' \"$*\" >&2\n    exit 1\n}\n\nrequire_uint() {\n    local name=\"$1\" value=\"$2\" min=\"$3\" max=\"$4\"\n    [[ \"$value\" =~ ^[0-9]+$ ]] || fail \"$name must be an integer.\"\n    (( value >= min && value <= max )) || fail \"$name must be between $min and $max.\"\n}\n\nhas_unsafe_text() {\n    local value=\"$1\"\n    [[ \"$value\" == *$'\\n'* || \"$value\" == *$'\\r'* || \"$value\" == *$'\\t'* || \"$value\" == *'\"'* || \"$value\" == *'\\\\'* ]]\n}\n\nSERVER_NAME=\"${SERVER_NAME-Natural Selection 2 Server}\"\nMAX_PLAYERS=\"${MAX_PLAYERS-20}\"\nMAX_SPECTATORS=\"${MAX_SPECTATORS-5}\"\nDEFAULT_MAP=\"${DEFAULT_MAP-ns2_summit}\"\nSERVER_PASSWORD=\"${SERVER_PASSWORD-}\"\nMOD_IDS=\"${MOD_IDS-}\"\n\n[[ -n \"$SERVER_NAME\" ]] || fail \"SERVER_NAME cannot be empty.\"\n(( ${#SERVER_NAME} <= 80 )) || fail \"SERVER_NAME is limited to 80 characters.\"\nhas_unsafe_text \"$SERVER_NAME\" && fail 'SERVER_NAME cannot contain control characters, double quotes, or backslashes.'\n\nrequire_uint SERVER_PORT \"${SERVER_PORT:?SERVER_PORT is required}\" 1024 65534\nrequire_uint MAX_PLAYERS \"$MAX_PLAYERS\" 1 24\nrequire_uint MAX_SPECTATORS \"$MAX_SPECTATORS\" 0 24\nQUERY_PORT=$((SERVER_PORT + 1))\n\ncase \"$DEFAULT_MAP\" in\n    ns2_ayumi|ns2_biodome|ns2_caged|ns2_derelict|ns2_descent|ns2_docking|ns2_eclipse|ns2_kodiak|ns2_metro|ns2_mineshaft|ns2_origin|ns2_refinery|ns2_summit|ns2_tanith|ns2_tram|ns2_unearthed|ns2_veil) ;;\n    *) fail \"DEFAULT_MAP is not one of the 17 maps shipped by app 4940.\" ;;\nesac\n\nif [[ -n \"$SERVER_PASSWORD\" ]]; then\n    (( ${#SERVER_PASSWORD} <= 64 )) || fail \"SERVER_PASSWORD is limited to 64 characters.\"\n    has_unsafe_text \"$SERVER_PASSWORD\" && fail 'SERVER_PASSWORD cannot contain control characters, double quotes, or backslashes.'\nfi\n\nif [[ -n \"$MOD_IDS\" ]]; then\n    [[ \"$MOD_IDS\" =~ ^[0-9A-Fa-f]+([[:space:]]+[0-9A-Fa-f]+)*$ ]] || fail \"MOD_IDS must be space-separated hexadecimal Workshop IDs.\"\n    read -r -a mod_tokens <<< \"$MOD_IDS\"\n    MOD_IDS=\"${mod_tokens[*]}\"\nfi\n\n[[ -x ./x64/server_linux ]] || fail \"Missing executable: x64/server_linux. Reinstall the server.\"\n[[ -f ./steamcmd/linux64/steamclient.so ]] || fail \"Missing steamclient.so. Reinstall the server.\"\n\nmkdir -p .steam/sdk64 config/Workshop logs\nln -sfn \"$SERVER_ROOT/steamcmd/linux64/steamclient.so\" .steam/sdk64/steamclient.so\n\nexport HOME=\"$SERVER_ROOT\"\n\nargs=(\n    -ip 0.0.0.0\n    -name \"$SERVER_NAME\"\n    -port \"$SERVER_PORT\"\n    -map \"$DEFAULT_MAP\"\n    -limit \"$MAX_PLAYERS\"\n    -speclimit \"$MAX_SPECTATORS\"\n    -config_path config\n    -logdir logs\n    -modstorage config/Workshop\n)\n\n[[ -z \"$SERVER_PASSWORD\" ]] || args+=( -password \"$SERVER_PASSWORD\" )\n[[ -z \"$MOD_IDS\" ]] || args+=( -mods \"$MOD_IDS\" )\n\nprintf 'Starting Natural Selection 2: game UDP %s, query UDP %s\\n' \"$SERVER_PORT\" \"$QUERY_PORT\"\n\nexec ./x64/server_linux \"${args[@]}\"\nNS2_START_SCRIPT\nchmod 0755 \"$SERVER_DIR/start.sh\"\nbash -n \"$SERVER_DIR/start.sh\"\n\necho \"Natural Selection 2 app 4940 installed successfully.\"\n",
+            "container": "ghcr.io/ptero-eggs/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Server Name",
+            "description": "Name shown in the NS2 server browser. Maximum 80 characters; control characters, double quotes, and backslashes are rejected by the startup wrapper.",
+            "env_variable": "SERVER_NAME",
+            "default_value": "Natural Selection 2 Server",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:80",
+            "field_type": "text"
+        },
+        {
+            "name": "Maximum Players",
+            "description": "Active player slots. The NS2 engine hard limit is 24. The game is mainly single-thread limited; larger servers need high per-core CPU speed.",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "20",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|between:1,24",
+            "field_type": "text"
+        },
+        {
+            "name": "Spectator Slots",
+            "description": "Additional spectator slots. 0 disables dedicated spectator slots; accepted range is 0-24.",
+            "env_variable": "MAX_SPECTATORS",
+            "default_value": "5",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|between:0,24",
+            "field_type": "text"
+        },
+        {
+            "name": "Initial Map",
+            "description": "Initial map. Valid shipped maps: ns2_ayumi,ns2_biodome,ns2_caged,ns2_derelict,ns2_descent,ns2_docking,ns2_eclipse,ns2_kodiak,ns2_metro,ns2_mineshaft,ns2_origin,ns2_refinery,ns2_summit,ns2_tanith,ns2_tram,ns2_unearthed,ns2_veil.",
+            "env_variable": "DEFAULT_MAP",
+            "default_value": "ns2_summit",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:ns2_ayumi,ns2_biodome,ns2_caged,ns2_derelict,ns2_descent,ns2_docking,ns2_eclipse,ns2_kodiak,ns2_metro,ns2_mineshaft,ns2_origin,ns2_refinery,ns2_summit,ns2_tanith,ns2_tram,ns2_unearthed,ns2_veil",
+            "field_type": "text"
+        },
+        {
+            "name": "Server Password",
+            "description": "Optional player password. Leave blank for a public server. Maximum 64 characters; control characters, double quotes, and backslashes are rejected.",
+            "env_variable": "SERVER_PASSWORD",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Workshop Mod IDs",
+            "description": "Optional space-separated hexadecimal Workshop IDs for -mods. Example: 706D242. MapCycle.json can also define decimal UGC IDs and per-map mods.",
+            "env_variable": "MOD_IDS",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:512|regex:/^[0-9A-Fa-f]+( [0-9A-Fa-f]+)*$/",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Update",
+            "description": "1 updates app 4940 through SteamCMD every time the container starts; 0 starts the installed build without checking Steam.",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Validate on Startup",
+            "description": "1 makes SteamCMD validate all app files during each automatic update; 0 performs a normal update check. Validation is slower and may restore changed game files.",
+            "env_variable": "VALIDATE",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Steam App ID",
+            "description": "Natural Selection 2 Dedicated Server app ID.",
+            "env_variable": "SRCDS_APPID",
+            "default_value": "4940",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string|in:4940",
+            "field_type": "text"
+        },
+        {
+            "name": "Steam User",
+            "description": "App 4940 currently installs anonymously; no personal Steam account is required.",
+            "env_variable": "STEAM_USER",
+            "default_value": "anonymous",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string|in:anonymous",
+            "field_type": "text"
+        },
+        {
+            "name": "Windows Install",
+            "description": "Native Linux server files are required.",
+            "env_variable": "WINDOWS_INSTALL",
+            "default_value": "0",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|boolean",
+            "field_type": "text"
+        }
+    ]
+}
